@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Anonymous Stranger Chat</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f4f4f9; display: flex; flex-direction: column; height: 100vh; margin: 0; }
+        header { background: #333; color: white; padding: 15px; text-align: center; font-weight: bold; font-size: 16px; display: flex; justify-content: space-between; align-items: center; }
+        #online-counter { background: #4CAF50; padding: 3px 8px; border-radius: 12px; font-size: 12px; }
+        #chat-box { flex: 1; padding: 15px; overflow-y: auto; background: #ffffff; display: flex; flex-direction: column; gap: 8px; }
+        .msg { max-width: 80%; padding: 10px 14px; border-radius: 16px; font-size: 15px; word-break: break-word; }
+        .msg img { max-width: 100%; border-radius: 8px; display: block; margin-top: 5px; }
+        .system { color: #666; font-style: italic; font-size: 13px; text-align: center; align-self: center; background: #eee; padding: 5px 12px; border-radius: 10px; }
+        .you { color: white; background: #007bff; align-self: flex-end; border-bottom-right-radius: 2px; }
+        .stranger { color: #333; background: #e9ecef; align-self: flex-start; border-bottom-left-radius: 2px; }
+        #typing-indicator { font-size: 12px; color: #888; font-style: italic; padding-left: 5px; height: 15px; background: white; padding: 2px 15px; }
+        #controls { padding: 10px; display: flex; gap: 8px; background: #eee; border-top: 1px solid #ddd; align-items: center; }
+        input[type="text"] { flex: 1; padding: 12px; font-size: 16px; border: 1px solid #ccc; border-radius: 24px; outline: none; }
+        button { padding: 12px 20px; font-size: 15px; cursor: pointer; border: none; border-radius: 24px; font-weight: bold; }
+        #action-btn { background: #ff4757; color: white; }
+        #send-btn { background: #007bff; color: white; }
+        .image-btn-label { background: #2ed573; color: white; padding: 12px; border-radius: 50%; font-size: 18px; cursor: pointer; display: flex; align-items: center; justify-content: center; width: 45px; height: 45px; font-weight: bold; }
+        button:disabled, input:disabled, .disabled-label { opacity: 0.5; cursor: not-allowed; pointer-events: none; }
+    </style>
+</head>
+<body>
+
+    <header>
+        <span>⚡ Stranger Chat</span>
+        <span id="online-counter">Online: 1</span>
+    </header>
+
+    <div id="chat-box">
+        <div class="system">Tap "Find Stranger" to start matching anonymously.</div>
+    </div>
+
+    <div id="typing-indicator"></div>
+
+    <div id="controls">
+        <button id="action-btn" onclick="startSearch()">Find Stranger</button>
+        
+        <!-- Image upload icon hidden inside a styled touch label -->
+        <label htmlFor="image-input" id="img-label" class="image-btn-label disabled-label">📷
+            <input type="file" id="image-input" accept="image/*" style="display: none;" onchange="uploadImage(this)">
+        </label>
+
+        <input type="text" id="msg-input" placeholder="Type a message..." disabled oninput="handleTyping()" onkeypress="if(event.key==='Enter') sendMessage()">
+        <button id="send-btn" onclick="sendMessage()" disabled>Send</button>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+        const chatBox = document.getElementById('chat-box');
+        const msgInput = document.getElementById('msg-input');
+        const sendBtn = document.getElementById('send-btn');
+        const actionBtn = document.getElementById('action-btn');
+        const onlineCounter = document.getElementById('online-counter');
+        const typingIndicator = document.getElementById('typing-indicator');
+        const imgLabel = document.getElementById('img-label');
+
+        let isConnected = false;
+        let typingTimeout;
+
+        function appendMessage(text, className, isImage = false) {
+            const div = document.createElement('div');
+            div.className = `msg ${className}`;
+            if (isImage) {
+                const img = document.createElement('img');
+                img.src = text;
+                div.appendChild(img);
+            } else {
+                div.innerText = text;
+            }
+            chatBox.appendChild(div);
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }
+
+        function startSearch() {
+            socket.emit('find_stranger');
+        }
+
+        function sendMessage() {
+            const text = msgInput.value.trim();
+            if(text && isConnected) {
+                appendMessage(text, "you");
+                socket.emit('send_message', text);
+                msgInput.value = "";
+                socket.emit('typing_status', false);
+            }
+        }
+
+        function uploadImage(input) {
+            if (!isConnected || !input.files || !input.files[0]) return;
+            
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const base64Image = e.target.result;
+                appendMessage(base64Image, "you", true);
+                socket.emit('send_image', base64Image);
+            };
+            reader.readAsDataURL(input.files[0]);
+            input.value = ""; // Clear file selector input
+        }
+
+        function handleTyping() {
+            if (!isConnected) return;
+            socket.emit('typing_status', true);
+            clearTimeout(typingTimeout);
+            typingTimeout = setTimeout(() => {
+                socket.emit('typing_status', false);
+            }, 2000);
+        }
+
+        socket.on('update_online_count', (count) => {
+            onlineCounter.innerText = `Online: ${count}`;
+        });
+
+        socket.on('waiting', () => {
+            appendMessage("Searching for an available stranger...", "system");
+            actionBtn.innerText = "Searching...";
+            actionBtn.disabled = true;
+        });
+
+        socket.on('chat_start', () => {
+            isConnected = true;
+            chatBox.innerHTML = ""; 
+            appendMessage("Connected! Say hello or share a photo.", "system");
+            msgInput.disabled = false;
+            sendBtn.disabled = false;
+            imgLabel.classList.remove('disabled-label');
+            actionBtn.innerText = "Next ➡️";
+            actionBtn.disabled = false;
+        });
+
+        socket.on('receive_message', (text) => {
+            appendMessage(text, "stranger");
+        });
+
+        socket.on('receive_image', (imageDataUrl) => {
+            appendMessage(imageDataUrl, "stranger", true);
+        });
+
+        socket.on('stranger_typing', (isTyping) => {
+            typingIndicator.innerText = isTyping ? "Stranger is typing..." : "";
+        });
+
+        socket.on('partner_disconnected', () => {
+            isConnected = false;
+            msgInput.disabled = true;
+            sendBtn.disabled = true;
+            imgLabel.classList.add('disabled-label');
+            typingIndicator.innerText = "";
+            appendMessage("Stranger disconnected.", "system");
+            actionBtn.innerText = "Find Stranger";
+        });
+    </script>
+</body>
+</html>
